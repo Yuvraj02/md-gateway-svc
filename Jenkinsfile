@@ -60,11 +60,14 @@ pipeline {
     stage('Deps') {
       steps {
         sh '''
+          set -eux
+          test -f go.mod
           docker run --rm \
             -e GOWORK=off \
             -v "$PWD":/workspace -w /workspace \
+            --entrypoint /bin/sh \
             ${GO_IMAGE} \
-            sh -c "apk add --no-cache git && go version && go mod tidy"
+            -ec 'apk add --no-cache git && go version && go mod tidy'
         '''
       }
     }
@@ -75,8 +78,9 @@ pipeline {
           docker run --rm \
             -e GOWORK=off \
             -v "$PWD":/workspace -w /workspace \
+            --entrypoint /bin/sh \
             ${GO_IMAGE} \
-            sh -c "apk add --no-cache git && go vet ./..."
+            -ec 'apk add --no-cache git && go vet ./...'
         '''
       }
     }
@@ -87,8 +91,9 @@ pipeline {
           docker run --rm \
             -e GOWORK=off \
             -v "$PWD":/workspace -w /workspace \
+            --entrypoint /bin/sh \
             ${GO_IMAGE} \
-            sh -c "apk add --no-cache git && go test ./..."
+            -ec 'apk add --no-cache git && go test ./...'
         '''
       }
     }

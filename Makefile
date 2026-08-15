@@ -1,6 +1,6 @@
 BIN=bin/gateway
 DOCKER_IMAGE?=marketing-digest-gateway
-WS_ROOT:=$(abspath ../..)
+WS_ROOT:=$(abspath .)
 
 .PHONY: build test lint run docker-build tidy
 
@@ -21,4 +21,4 @@ run: build
 	set -a && [ -f .env ] && . ./.env; set +a; ./$(BIN)
 
 docker-build:
-	docker build -f $(abspath Dockerfile) -t $(DOCKER_IMAGE) $(WS_ROOT)
+	docker build -t $(DOCKER_IMAGE) $(WS_ROOT)

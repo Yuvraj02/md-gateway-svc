@@ -1,10 +1,7 @@
-// Pipeline: gateway
-// Script Path: backend/gateway/Jenkinsfile
-// Flow: build/push image -> bump md-helm-values image.tag (Argo CD deploys)
-// No DB migration for gateway.
+// Pipeline for md-gateway-svc (service repo root = workspace).
+// Flow: build/push image -> bump md-helm-values image.tag (Argo CD)
 //
-// Jenkins credentials:
-//   github-helm-values  (username + password/token) — push to md-helm-values
+// Credentials: github-helm-values (username/token)
 
 pipeline {
   agent any
@@ -16,8 +13,6 @@ pipeline {
     HELM_VALUES_REPO = 'https://github.com/Yuvraj02/md-helm-values.git'
     AWS_REGION       = "${env.AWS_DEFAULT_REGION ?: 'ap-south-1'}"
     GO_IMAGE         = 'golang:1.25-alpine'
-    BUF_IMAGE        = 'bufbuild/buf:1.47.2'
-    SERVICE_DIR      = 'backend/gateway'
   }
 
   stages {
@@ -25,9 +20,11 @@ pipeline {
       steps {
         checkout scm
         script {
-          // GIT_COMMIT is only reliable after checkout scm
           env.IMAGE_TAG = env.GIT_COMMIT.take(8)
           echo "IMAGE_TAG=${env.IMAGE_TAG}"
+          if (!fileExists('go.mod') || !fileExists('Dockerfile')) {
+            error('Expected md-gateway-svc repo root (go.mod + Dockerfile). Check Jenkins SCM URL.')
+          }
         }
       }
     }
@@ -35,7 +32,6 @@ pipeline {
     stage('Resolve ECR') {
       steps {
         script {
-          // Resolve in shell only — Groovy System.getenv is blocked by script-security sandbox.
           def account = sh(
             script: '''
               set -euo pipefail
@@ -52,7 +48,7 @@ pipeline {
             returnStdout: true
           ).trim()
           if (!account) {
-            error('Could not resolve AWS account id (MD_ACCOUNT_ID unset and IMDS failed)')
+            error('Could not resolve AWS account id')
           }
           env.AWS_ACCOUNT_ID = account
           env.IMAGE_REPO = "${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com/marketing-digest/${env.ECR_NAME}"
@@ -65,9 +61,10 @@ pipeline {
       steps {
         sh '''
           docker run --rm \
-            -v "$PWD":/workspace -w "/workspace/${SERVICE_DIR}" \
+            -e GOWORK=off \
+            -v "$PWD":/workspace -w /workspace \
             ${GO_IMAGE} \
-            sh -c "apk add --no-cache git make && go version && make tidy"
+            sh -c "apk add --no-cache git && go version && go mod tidy"
         '''
       }
     }
@@ -76,12 +73,10 @@ pipeline {
       steps {
         sh '''
           docker run --rm \
-            -v "$PWD":/workspace -w "/workspace/${SERVICE_DIR}" \
+            -e GOWORK=off \
+            -v "$PWD":/workspace -w /workspace \
             ${GO_IMAGE} \
-            sh -c "apk add --no-cache git make && make lint"
-          docker run --rm \
-            -v "$PWD/md-protos":/workspace -w /workspace \
-            ${BUF_IMAGE} lint
+            sh -c "apk add --no-cache git && go vet ./..."
         '''
       }
     }
@@ -90,21 +85,17 @@ pipeline {
       steps {
         sh '''
           docker run --rm \
-            -v "$PWD":/workspace -w "/workspace/${SERVICE_DIR}" \
+            -e GOWORK=off \
+            -v "$PWD":/workspace -w /workspace \
             ${GO_IMAGE} \
-            sh -c "apk add --no-cache git make && make test"
+            sh -c "apk add --no-cache git && go test ./..."
         '''
       }
     }
 
     stage('Docker Build') {
       steps {
-        sh '''
-          docker build \
-            -f backend/gateway/Dockerfile \
-            -t ${IMAGE_REPO}:${IMAGE_TAG} \
-            .
-        '''
+        sh 'docker build -t ${IMAGE_REPO}:${IMAGE_TAG} .'
       }
     }
 
@@ -136,16 +127,14 @@ pipeline {
               "https://${GIT_USER}:${GIT_TOKEN}@github.com/Yuvraj02/md-helm-values.git" \
               helm-values-work
             cd helm-values-work
-
             test -f "${HELM_VALUES_PATH}"
             sed -i -E "s/^(  tag: ).*/\\1\\"${IMAGE_TAG}\\"/" "${HELM_VALUES_PATH}"
             sed -i -E "s|^(  repository: ).*|\\1${IMAGE_REPO}|" "${HELM_VALUES_PATH}"
-
             git config user.email "jenkins@marketing-digest.local"
             git config user.name "jenkins"
             git add "${HELM_VALUES_PATH}"
             if git diff --cached --quiet; then
-              echo "No helm-values change (tag already ${IMAGE_TAG})"
+              echo "No helm-values change"
             else
               git commit -m "chore(gateway): bump image.tag to ${IMAGE_TAG}"
               git push origin HEAD:main
@@ -161,7 +150,7 @@ pipeline {
       echo 'gateway pipeline failed.'
     }
     success {
-      echo "Pushed ${IMAGE_REPO}:${IMAGE_TAG} and bumped md-helm-values ${HELM_VALUES_PATH}. Argo CD will sync the Deployment."
+      echo "Pushed ${IMAGE_REPO}:${IMAGE_TAG}; Argo CD will sync from helm-values."
     }
   }
 }

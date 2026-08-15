@@ -18,4 +18,4 @@ require (
 	google.golang.org/protobuf v1.36.12 // indirect
 )
 
-replace github.com/marketing-digest/pkg => ../pkg
+replace github.com/marketing-digest/pkg => ./pkg
